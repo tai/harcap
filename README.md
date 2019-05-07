@@ -1,4 +1,4 @@
-# harcap - Capture HAR/trace/screenshot/filestrip on CLI
+# harcap - Capture HAR/trace/screenshot/filmstrip on CLI
 
 This is a tool to capture HAR and various outputs from given website.
 In addition to various capture features, it also has a feature to inject a delay for specified resource(s).
