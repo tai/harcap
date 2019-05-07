@@ -33,6 +33,42 @@ let connect = async (opt) => {
     }
 };
 
+let delay = async ms => new Promise(ok => setTimeout(ok, ms));
+
+let capture = async (opt, page, url) => {
+    let cameraStop = false;
+    let cameraLoop = async (opt, page, elapsed=0) => {
+        if (! opt.screenshot || opt.interval == 0) return;
+
+        // save screenshot
+        let savefile = opt.screenshot.replace("%d", ('000000' + elapsed).substr(-6));
+        let savetask = page.screenshot({ path: savefile, fullPage: opt.fullpage, type: 'jpeg' });
+
+        if (cameraStop) {
+            if (opt.debug > 0) console.log(`page loaded. saving screenshots...`);
+            return savetask;
+        }
+
+        // revursively chain to next capture event
+        if (opt.debug > 0) console.log(`taking more...`);
+        let nexttask = delay(opt.interval).then(() => {
+            return cameraLoop(opt, page, elapsed + opt.interval);
+        });
+        return Promise.all([savetask, nexttask]);
+    };
+
+    // run camera and load task in parallel
+    let cameraTask = cameraLoop(opt, page);
+    let loadTask = page.goto(url, {
+        waitUntil: 'networkidle2',
+        timeout: 0,
+    }).then(ret => {
+        cameraStop = true;
+    });
+
+    return Promise.all([loadTask, cameraTask]);
+}
+
 let main = async (opt) => {
     let url = opt.args.shift();
     let target = opt.args.map(expr => new RegExp(expr));
@@ -47,13 +83,14 @@ let main = async (opt) => {
     await page.setExtraHTTPHeaders(opt.header);
 
     // warmup
-    await page.setCacheEnabled(false);
+    await page.setCacheEnabled(opt.cache);
     for (let i = 0; i < opt.warmup; i++) {
         await page.goto(url, {
             waitUntil: 'networkidle2',
     	    timeout: 0,
         });
     }
+    await page.goto('about:blank');
 
     if (opt.trace) {
         await page.tracing.start({ path: opt.trace });
@@ -80,30 +117,30 @@ let main = async (opt) => {
         }
     });
 
-    const har = new PuppeteerHar(page);
-    await har.start();
-
-    await page.goto(url, {
-        waitUntil: 'networkidle2',
-	    timeout: 0,
-    });
-
-    if (opt.screenshot) {
-        await page.screenshot({ path: opt.screenshot });
+    if (opt.outfile) {
+        const har = new PuppeteerHar(page);
+        await har.start();
     }
 
-    // save HAR data with additional metrics
-    // TODO: Better to integrate lighthouse, if possible
-    const data = await har.stop();
-    const perf1 = await page._client.send('Performance.getMetrics');
-    const perf2 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.timing)));
-    data['log']['pages'][0]['extra'] = [perf1, perf2];
+    // load page
+    await capture(opt, page, url);
+
+    if (opt.screenshot && opt.interval == 0) {
+        await page.screenshot({ path: opt.screenshot, fullPage: opt.fullpage, type: 'jpeg' });
+    }
 
     if (opt.trace) {
         await page.tracing.stop();
     }
 
+    // save HAR data with additional metrics
     if (opt.outfile) {
+        // TODO: Better to integrate lighthouse, if possible
+        const data = await har.stop();
+        const perf1 = await page._client.send('Performance.getMetrics');
+        const perf2 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.timing)));
+        data['log']['pages'][0]['extra'] = [perf1, perf2];
+
         fs.writeFileSync(opt.outfile, JSON.stringify(data));
     }
 
@@ -127,17 +164,21 @@ let collect = (val, memo) => {
 
 commander
     .version('0.0.3')
-    .option('-v, --verbose', 'Verbose message output')
-    .option('-m, --model <help|model>', 'Emulate device (ex: iPhone 6)')
-    .option('-o, --outfile <har>', 'HAR file to save', 'result.har')
-    .option('-s, --screenshot <image>', 'Save screenshot')
-    .option('-d, --delay <ms>', 'Delay to apply', parseInt, 10000)
-    .option('-h, --headless', 'Run headless')
-    .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
-    .option('-t, --trace <tracelog>', 'Capture trace log')
-    .option('-n, --warmup <N>', 'Fetch page N-times before measurement', parseInt, 0)
-    .option('-H, --header <header>', 'Add header', header_add, {})
     .option('-C, --chrome <arg>', 'Pass arg to Chrome', collect, [])
+    .option('-D, --debug <level>', 'Set debug level', parseInt, 0)
+    .option('-H, --header <header>', 'Add header', header_add, {})
+    .option('-L, --headless', 'Run headless', false)
+    .option('-c, --cache', 'Enable caching', false)
+    .option('-d, --delay <ms>', 'Delay to apply', parseInt, 10000)
+    .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
+    .option('-f, --fullpage', 'Take fullpage screenshot', false)
+    .option('-i, --interval <ms>', 'Screenshot capture interval', parseInt, 0)
+    .option('-m, --model <help|model>', 'Emulate device (ex: iPhone 6)')
+    .option('-n, --warmup <N>', 'Fetch page N-times before measurement', parseInt, 0)
+    .option('-o, --outfile <har>', 'HAR file to save')
+    .option('-s, --screenshot <image>', 'Save screenshot (ex: image-%d.jpg)')
+    .option('-t, --trace <tracelog>', 'Capture trace log')
+    .option('-v, --verbose', 'Verbose message output')
     .parse(process.argv);
 
 if (commander.model == 'help') {
