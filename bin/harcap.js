@@ -64,6 +64,8 @@ let capture = async (opt, page, url) => {
         timeout: opt.timeout,
     }).then(ret => {
         cameraStop = true;
+    }).catch(err => {
+        cameraStop = true;
     });
 
     return Promise.all([loadTask, cameraTask]);
