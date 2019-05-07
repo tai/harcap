@@ -1,16 +1,17 @@
 {
-  "name": "harcap-slowsim",
+  "name": "harcap",
   "version": "1.0.0",
   "description": "Capture HAR with delay injection",
-  "main": "bin/harcap-slowsim.js",
+  "main": "bin/harcap.js",
   "scripts": {
-    "start": "node bin/harcap-slowsim.js",
+    "start": "node bin/harcap.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Taisuke Yamada <tai@rakugaki.org>",
   "license": "ISC",
   "dependencies": {
     "commander": "^2.20.0",
+    "lighthouse": "^4.3.1",
     "puppeteer": "^1.15.0",
     "puppeteer-har": "^1.0.5"
   }
