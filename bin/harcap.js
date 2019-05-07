@@ -188,7 +188,7 @@ commander
     .option('-D, --debug <level>', 'Set debug level', parseInt, 0)
     .option('-H, --header <header>', 'Add header', header_add, {})
     .option('-L, --headless', 'Run headless', false)
-    .option('-T, --timeout', 'Timeout', parseInt, 0)
+    .option('-T, --timeout <ms>', 'Timeout', parseInt, 0)
     .option('-c, --cache', 'Enable caching', false)
     .option('-d, --delay <ms>:<expr>', 'Apply delay to matching URL', delay_add, [])
     .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
