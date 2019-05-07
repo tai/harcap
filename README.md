@@ -15,8 +15,9 @@ Options:
   -D, --debug <level>       Set debug level (default: 0)
   -H, --header <header>     Add header (default: {})
   -L, --headless            Run headless
+  -T, --timeout             Timeout
   -c, --cache               Enable caching
-  -d, --delay <ms>          Delay to apply (default: 10000)
+  -d, --delay <ms>:<expr>   Apply delay to matching URL (default: [])
   -e, --endpoint <url>      Connect to given websocket endpoint
   -f, --fullpage            Take fullpage screenshot
   -i, --interval <ms>       Screenshot capture interval (default: 0)
@@ -27,4 +28,4 @@ Options:
   -t, --trace <tracelog>    Capture trace log
   -v, --verbose             Verbose message output
   -h, --help                output usage information
-```
+  ```
