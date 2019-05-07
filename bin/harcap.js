@@ -61,7 +61,7 @@ let capture = async (opt, page, url) => {
     let cameraTask = cameraLoop(opt, page);
     let loadTask = page.goto(url, {
         waitUntil: 'networkidle2',
-        timeout: 0,
+        timeout: opt.timeout,
     }).then(ret => {
         cameraStop = true;
     });
@@ -71,7 +71,6 @@ let capture = async (opt, page, url) => {
 
 let main = async (opt) => {
     let url = opt.args.shift();
-    let target = opt.args.map(expr => new RegExp(expr));
 
     const ua = await connect(opt);
     const page = await ua.newPage();
@@ -87,7 +86,7 @@ let main = async (opt) => {
     for (let i = 0; i < opt.warmup; i++) {
         await page.goto(url, {
             waitUntil: 'networkidle2',
-    	    timeout: 0,
+    	    timeout: opt.timeout,
         });
     }
     await page.goto('about:blank');
@@ -100,17 +99,30 @@ let main = async (opt) => {
     await page.setRequestInterception(true);
     page.on('request', request => {
         let url = request.url();
-        let ret = target.map(re => re.test(url));
+        let ret = opt.delay.find(spec => spec[0].test(url));
 
         if (opt.verbose) {
             console.log(`URL: ${url}`);
         }
 
-        if (ret.includes(true)) {
-            if (opt.verbose) {
-                console.log(`Delaying URL: ${url}`);
+        if (ret) {
+            let delay = ret[1];
+
+            switch (delay) {
+            case -1:
+                if (opt.verbose || opt.debug > 0) {
+                    console.log(`Blocking: ${url}`);
+                }
+                request.abort(404);
+                break;
+            case 0:
+                delay = 86400; // handle "0 delay" as "BIG DELAY"
+            default:
+                if (opt.verbose || opt.debug > 0) {
+                    console.log(`Delaying: ${url}`);
+                }
+                setTimeout(() => request.continue(), delay);
             }
-            setTimeout(() => request.continue(), opt.delay);
         }
         else {
             request.continue();
@@ -162,14 +174,23 @@ let collect = (val, memo) => {
     return memo;
 };
 
+let delay_add = (spec, memo) => {
+    let i = spec.indexOf(':');
+    let delay = parseInt(spec.substr(0, i));
+    let expr = new RegExp(spec.substr(i + 1));
+    memo.push([expr, delay]);
+    return memo;
+};
+
 commander
     .version('0.0.3')
     .option('-C, --chrome <arg>', 'Pass arg to Chrome', collect, [])
     .option('-D, --debug <level>', 'Set debug level', parseInt, 0)
     .option('-H, --header <header>', 'Add header', header_add, {})
     .option('-L, --headless', 'Run headless', false)
+    .option('-T, --timeout', 'Timeout', parseInt, 0)
     .option('-c, --cache', 'Enable caching', false)
-    .option('-d, --delay <ms>', 'Delay to apply', parseInt, 10000)
+    .option('-d, --delay <ms>:<expr>', 'Apply delay to matching URL', delay_add, [])
     .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
     .option('-f, --fullpage', 'Take fullpage screenshot', false)
     .option('-i, --interval <ms>', 'Screenshot capture interval', parseInt, 0)
