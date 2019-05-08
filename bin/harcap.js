@@ -65,6 +65,7 @@ let capture = async (opt, page, url) => {
     }).then(ret => {
         cameraStop = true;
     }).catch(err => {
+        if (opt.debug > 0) console.log('Interrupted page load. Possible timeout.');
         cameraStop = true;
     });
 
@@ -73,6 +74,7 @@ let capture = async (opt, page, url) => {
 
 let main = async (opt) => {
     let url = opt.args.shift();
+    let plugins = opt.plugin.map(file => require(file));
 
     const ua = await connect(opt);
     const page = await ua.newPage();
@@ -82,20 +84,19 @@ let main = async (opt) => {
     }
 
     await page.setExtraHTTPHeaders(opt.header);
+    await page.setCacheEnabled(opt.cache);
+
+    // hook: setup-stage
+    plugins.forEach(plugin => plugin.setup && plugin.setup(opt, url, ua, page));
 
     // warmup
-    await page.setCacheEnabled(opt.cache);
-    for (let i = 0; i < opt.warmup; i++) {
+    for (let i = 0; i < opt.prewarm; i++) {
         await page.goto(url, {
             waitUntil: 'networkidle2',
     	    timeout: opt.timeout,
         });
     }
     await page.goto('about:blank');
-
-    if (opt.trace) {
-        await page.tracing.start({ path: opt.trace });
-    }
 
     // inject delay
     await page.setRequestInterception(true);
@@ -118,7 +119,7 @@ let main = async (opt) => {
                 request.abort(404);
                 break;
             case 0:
-                delay = 86400; // handle "0 delay" as "BIG DELAY"
+                delay = 300000; // handle "0 delay" as "BIG DELAY of 300s"
             default:
                 if (opt.verbose || opt.debug > 0) {
                     console.log(`Delaying: ${url}`);
@@ -131,13 +132,22 @@ let main = async (opt) => {
         }
     });
 
-    if (opt.outfile) {
-        const har = new PuppeteerHar(page);
-        await har.start();
+    if (opt.trace) {
+        await page.tracing.start({ path: opt.trace });
     }
 
+    const har = new PuppeteerHar(page);
+    await har.start();
+
+    // hook: before-stage
+    plugins.forEach(plugin => plugin.before && plugin.before(opt, url, ua, page));
+
     // load page
+    // TODO: Consider adding second-time load measurement
     await capture(opt, page, url);
+
+    // hook: after-stage
+    plugins.forEach(plugin => plugin.after && plugin.after(opt, url, ua, page));
 
     if (opt.screenshot && opt.interval == 0) {
         await page.screenshot({ path: opt.screenshot, fullPage: opt.fullpage, type: 'jpeg' });
@@ -147,16 +157,27 @@ let main = async (opt) => {
         await page.tracing.stop();
     }
 
+    // DEBUG: for puppeteer-har/chrome-har debugging
+    //fs.writeFileSync('debug.json', JSON.stringify(har.events));
+
+    let data = await har.stop();
+
+    // TODO: Better to integrate lighthouse, if possible
+    let perf1 = await page._client.send('Performance.getMetrics');
+    let perf2 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.timing)));
+    let perf3 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.getEntriesByType('paint'))));
+    data['log']['pages'][0]['extra'] = [perf1, perf2, perf3];
+
+    // hook: process-stage
+    plugins.forEach(plugin => plugin.process && plugin.process(opt, url, ua, page, data));
+
     // save HAR data with additional metrics
     if (opt.outfile) {
-        // TODO: Better to integrate lighthouse, if possible
-        const data = await har.stop();
-        const perf1 = await page._client.send('Performance.getMetrics');
-        const perf2 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.timing)));
-        data['log']['pages'][0]['extra'] = [perf1, perf2];
-
         fs.writeFileSync(opt.outfile, JSON.stringify(data));
     }
+
+    // hook: cleanup-stage
+    plugins.forEach(plugin => plugin.cleanup && plugin.cleanup(opt, url, ua, page, data));
 
     if (! opt.endpoint) {
         await ua.close();
@@ -185,20 +206,23 @@ let delay_add = (spec, memo) => {
 };
 
 commander
-    .version('0.0.3')
+    .version('0.0.4')
     .option('-C, --chrome <arg>', 'Pass arg to Chrome', collect, [])
     .option('-D, --debug <level>', 'Set debug level', parseInt, 0)
     .option('-H, --header <header>', 'Add header', header_add, {})
     .option('-L, --headless', 'Run headless', false)
+    .option('-P, --plugin <file>', 'Add plugin', collect, [])
     .option('-T, --timeout <ms>', 'Timeout', parseInt, 0)
+    .option('-X, --extra <arg>', 'Pass arg to plugins', collect, [])
     .option('-c, --cache', 'Enable caching', false)
     .option('-d, --delay <ms>:<expr>', 'Apply delay to matching URL', delay_add, [])
     .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
     .option('-f, --fullpage', 'Take fullpage screenshot', false)
     .option('-i, --interval <ms>', 'Screenshot capture interval', parseInt, 0)
     .option('-m, --model <help|model>', 'Emulate device (ex: iPhone 6)')
-    .option('-n, --warmup <N>', 'Fetch page N-times before measurement', parseInt, 0)
+    .option('-n, --repeat <N>', 'Repeat measurement N-times (TBD)', parseInt, 1)
     .option('-o, --outfile <har>', 'HAR file to save')
+    .option('-p, --prewarm <N>', 'Fetch page N-times before measurement', parseInt, 0)
     .option('-s, --screenshot <image>', 'Save screenshot (ex: image-%d.jpg)')
     .option('-t, --trace <tracelog>', 'Capture trace log')
     .option('-v, --verbose', 'Verbose message output')
