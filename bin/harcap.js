@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+//
+// TODO:
+// - support reload test
+// - check visual status, position, and area size of each element in final render result
+// -- not sure how to handle text (JS, CSS) assets
+// - merge lighthouse for speedindex and other extended metrics
+// 
 
 //
 // See also;
@@ -65,7 +72,7 @@ let capture = async (opt, page, url) => {
     }).then(ret => {
         cameraStop = true;
     }).catch(err => {
-        if (opt.debug > 0) console.log('Interrupted page load. Possible timeout.');
+        if (opt.debug > 0) console.log('Interrupted page load - possible timeout.');
         cameraStop = true;
     });
 
@@ -75,10 +82,13 @@ let capture = async (opt, page, url) => {
 let main = async (opt) => {
     let url = opt.args.shift();
     let plugins = opt.plugin.map(file => require(file));
+    let delay_time = {};
+    let delay_count = {};
 
     const ua = await connect(opt);
     const page = await ua.newPage();
 
+    await page.setViewport(parseWH(opt.screensize));
     if (opt.model) {
         await page.emulate(PDD[opt.model]);
     }
@@ -99,21 +109,37 @@ let main = async (opt) => {
     await page.goto('about:blank');
 
     // inject delay
-    await page.setRequestInterception(true);
-    page.on('request', request => {
-        let url = request.url();
-        let ret = opt.delay.find(spec => spec[0].test(url));
+    if (opt.delay.length > 0) {
+        // NOTE: This disables caching (conflicts with --cache)
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            let url = request.url();
 
-        if (opt.verbose) {
-            console.log(`URL: ${url}`);
-        }
+            if (opt.debug > 1) {
+                console.log(`URL: ${url}`);
+            }
 
-        if (ret) {
-            let delay = ret[1];
+            let ret = opt.delay.findIndex(spec => spec[0].test(url));
+            if (ret < 0) {
+                request.continue();
+                return;
+            }
 
+            // check match count with max match limit
+            delay_count[ret] = delay_count[ret] ? delay_count[ret] + 1 : 1;
+            if (opt.maxMatch > 0 && delay_count[ret] > opt.maxMatch) {
+                if (opt.debug > 0) {
+                    console.log(`Skipping: ${url}`);
+                }
+                request.continue();
+                return;
+            }
+
+            // take delay/block action
+            let delay = opt.delay[ret][1];
             switch (delay) {
             case -1:
-                if (opt.verbose || opt.debug > 0) {
+                if (opt.debug > 0) {
                     console.log(`Blocking: ${url}`);
                 }
                 request.abort(404);
@@ -121,16 +147,14 @@ let main = async (opt) => {
             case 0:
                 delay = 300000; // handle "0 delay" as "BIG DELAY of 300s"
             default:
-                if (opt.verbose || opt.debug > 0) {
+                if (opt.debug > 0) {
                     console.log(`Delaying: ${url}`);
                 }
+                delay_time[url] = delay;
                 setTimeout(() => request.continue(), delay);
             }
-        }
-        else {
-            request.continue();
-        }
-    });
+        });
+    }
 
     if (opt.trace) {
         await page.tracing.start({ path: opt.trace });
@@ -166,7 +190,20 @@ let main = async (opt) => {
     let perf1 = await page._client.send('Performance.getMetrics');
     let perf2 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.timing)));
     let perf3 = JSON.parse(await page.evaluate(() => JSON.stringify(window.performance.getEntriesByType('paint'))));
-    data['log']['pages'][0]['extra'] = [perf1, perf2, perf3];
+    data['log']['pages'][0]['extra'] = {
+        metrics: perf1['metrics'],
+        timing: perf2,
+        paint: perf3,
+    };
+
+    // record delay in HAR (also seems to be counted in "_queued" field)
+    let assets = data['log']['entries'];
+    for (let i = 0; i < assets.length; i++) {
+        let url = assets[i]['request']['url'];
+        if (delay_time[url] > 0) {
+            assets[i]['timings']['_delayed'] = delay_time[url];
+        }
+    }
 
     // hook: process-stage
     plugins.forEach(plugin => plugin.process && plugin.process(opt, url, ua, page, data));
@@ -205,13 +242,20 @@ let delay_add = (spec, memo) => {
     return memo;
 };
 
+let parseWH = (spec) => {
+    let wh = spec.split('x').map(v => parseInt(v));
+    return { width: wh[0], height: wh[1] };
+};
+
 commander
     .version('0.0.4')
     .option('-C, --chrome <arg>', 'Pass arg to Chrome', collect, [])
     .option('-D, --debug <level>', 'Set debug level', parseInt, 0)
-    .option('-H, --header <header>', 'Add header', header_add, {})
+    .option('-H, --header <header>', 'Add HTTP header', header_add, {})
     .option('-L, --headless', 'Run headless', false)
+    .option('-M, --model <help|model>', 'Emulate device (ex: iPhone 6)')
     .option('-P, --plugin <file>', 'Add plugin', collect, [])
+    .option('-S, --screensize <WxH>', 'Screen size', '1920x1080')
     .option('-T, --timeout <ms>', 'Timeout', parseInt, 0)
     .option('-X, --extra <arg>', 'Pass arg to plugins', collect, [])
     .option('-c, --cache', 'Enable caching', false)
@@ -219,13 +263,12 @@ commander
     .option('-e, --endpoint <url>', 'Connect to given websocket endpoint')
     .option('-f, --fullpage', 'Take fullpage screenshot', false)
     .option('-i, --interval <ms>', 'Screenshot capture interval', parseInt, 0)
-    .option('-m, --model <help|model>', 'Emulate device (ex: iPhone 6)')
+    .option('-m, --max-match <N>', 'Stop delaying after N-time match for each entry', parseInt, 0)
     .option('-n, --repeat <N>', 'Repeat measurement N-times (TBD)', parseInt, 1)
     .option('-o, --outfile <har>', 'HAR file to save')
     .option('-p, --prewarm <N>', 'Fetch page N-times before measurement', parseInt, 0)
     .option('-s, --screenshot <image>', 'Save screenshot (ex: image-%d.jpg)')
     .option('-t, --trace <tracelog>', 'Capture trace log')
-    .option('-v, --verbose', 'Verbose message output')
     .parse(process.argv);
 
 if (commander.model == 'help') {
