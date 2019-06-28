@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Capture HAR with delay injection",
   "main": "bin/harcap.js",
+  "bin": {
+    "harcap": "bin/harcap.js"
+  },
   "scripts": {
     "start": "node bin/harcap.js",
     "test": "echo \"Error: no test specified\" && exit 1"
